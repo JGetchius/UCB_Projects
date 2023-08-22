@@ -1,0 +1,115 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+## Title: "NYPD_Shooting_by_Vic_Age"
+## Author: "JG"
+## Date: "2023-08-21"
+## Output: pdf_document
+
+
+# To begin install packages
+## tidyverse, knitr, lubridate
+
+# Load libraries
+```{r, openLibrary}
+library(tidyverse)
+```
+
+# Read csv from url
+```{r, # Read csv from url, results='hide',echo=FALSE}
+
+# Read csv from url
+url_in<-"https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+nypd_raw_data<-read_csv(url_in) 
+```
+
+# Clean data
+```{r, # Clean up data,results='hide'}
+# Clean up data
+
+## Drop unneccessary columns
+nypd_data <- drop_na(nypd_raw_data) %>% select(-c(INCIDENT_KEY, LOCATION_DESC, X_COORD_CD, Y_COORD_CD, Latitude, Longitude, Lon_Lat, JURISDICTION_CODE, LOC_CLASSFCTN_DESC, LOC_OF_OCCUR_DESC))
+
+## Change the date type
+nypd_data <- nypd_data %>% 
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE))
+  
+## Filter out spurious age groups
+nypd_data<-nypd_data %>%
+  filter(!VIC_AGE_GROUP=="1022")
+  
+## Unique values in Victim Age group
+unique(nypd_data$VIC_AGE_GROUP)
+
+# Verify no missing values
+sum(is.na(nypd_data))
+
+## Change logical boolean into int and add DEATHS and INJURIES columns
+
+nypd_data <- nypd_data %>% mutate(STATISTICAL_MURDER_FLAG = case_when(STATISTICAL_MURDER_FLAG == FALSE ~ 0, STATISTICAL_MURDER_FLAG == TRUE ~ 1))
+nypd_data <- nypd_data %>% mutate(DEATHS = case_when(STATISTICAL_MURDER_FLAG == FALSE ~ 0, STATISTICAL_MURDER_FLAG == TRUE ~ 1))
+nypd_data <- nypd_data %>% mutate(INJURIES = case_when(STATISTICAL_MURDER_FLAG == FALSE ~ 1, STATISTICAL_MURDER_FLAG == TRUE ~ 0))
+
+nypd_murder_age <- nypd_data %>%
+  group_by(VIC_AGE_GROUP, OCCUR_DATE) %>%
+  summarize(STATISTICAL_MURDER_FLAG = sum(STATISTICAL_MURDER_FLAG)) %>% 
+  select(VIC_AGE_GROUP, OCCUR_DATE, STATISTICAL_MURDER_FLAG) %>% 
+  ungroup()
+
+nypd_injury_VIC_AGE_GROUP <- nypd_data %>%
+  group_by(VIC_AGE_GROUP, OCCUR_DATE) %>%
+  summarize(INJURIES = sum(INJURIES)) %>% 
+  select(VIC_AGE_GROUP, OCCUR_DATE, INJURIES) %>% 
+  ungroup()
+
+## Add new columns
+# Cumulative murders by VIC_AGE_GROUP
+nypd_murder_age <- nypd_murder_age %>%
+   mutate(CUMMURDER = ave(nypd_murder_age$STATISTICAL_MURDER_FLAG, nypd_murder_age$VIC_AGE_GROUP, FUN = cumsum))
+
+nypd_murder_age$SHOOTING=1
+
+# Cumulative Shootings by VIC_AGE_GROUP
+nypd_murder_age <- nypd_murder_age %>%
+  mutate(CUMSHOOTING = ave(nypd_murder_age$SHOOTING, nypd_murder_age$VIC_AGE_GROUP, FUN = cumsum))
+
+# Percentage of shootings are murders by VIC_AGE_GROUP
+nypd_murder_age$MURDERPERCENT <- with(nypd_murder_age, CUMMURDER/CUMSHOOTING *100) 
+```
+# Plot data
+```{r, plot,echo=FALSE}
+# Graphs
+nypd_murder_age %>%
+  ggplot(aes(x = OCCUR_DATE, y=CUMMURDER, group=VIC_AGE_GROUP, color=VIC_AGE_GROUP))+
+  geom_line()
+nypd_murder_age %>%
+  ggplot(aes(x = OCCUR_DATE, y=CUMSHOOTING, group=VIC_AGE_GROUP, color=VIC_AGE_GROUP))+
+  geom_line()
+nypd_murder_age %>%
+  ggplot(aes(x = OCCUR_DATE, y=MURDERPERCENT, group=VIC_AGE_GROUP, color=VIC_AGE_GROUP))+
+  geom_line()
+```
+# Model
+
+```{r, plot(mod)}
+# Modeling Data
+mod <- lm(CUMSHOOTING ~ CUMMURDER, data = nypd_murder_age)
+summary(mod)
+nypd_murder_age %>% slice_min(CUMSHOOTING)
+nypd_murder_age %>% slice_max(CUMSHOOTING)
+x_grid <- seq(0, 3000)
+new_df <- tibble(CUMSHOOTING = x_grid)
+nypd_pred <- nypd_murder_age %>% mutate(pred = predict(mod))
+ 
+
+# nypd_pred
+nypd_pred %>% ggplot() +
+  geom_point(aes(x = OCCUR_DATE, y=CUMSHOOTING), color= "blue")+
+  geom_point(aes(x = OCCUR_DATE, y = pred), color = "red")+
+  theme(legend.position ="bottom", 
+        axis.text.x=element_text(angle=90)) +
+  labs(title="Cummulative Shootings by age", y=NULL)
+```
