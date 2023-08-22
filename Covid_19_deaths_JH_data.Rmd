@@ -1,0 +1,213 @@
+---
+title: "Covid_19_deaths_JH_data"
+author: "JG"
+date: "2023-08-22"
+output:
+  html_document: default
+  pdf_document: default
+editor_options:
+  chunk_output_type: console
+---
+---
+Title: Covid 19
+Author: JG
+Date: "2023-08-19"
+output:
+  pdf_document: default
+  html_document: default
+editor_options: 
+  chunk_output_type: console
+---
+
+# Setup
+
+### install.packages("tidyverse"), 
+install.packages("readr"), install.packages("knitr"), 
+install.packages ("stringr"), install.packages("dplyr") 
+
+```{r, setup, warning=FALSE}
+library(tidyverse) 
+library(lubridate) 
+library(stringr) 
+library(readr) 
+library(selectr)
+```
+# Import Data
+### note:website error prohibited importing directly from site, save to local directory
+```{r, import data, results=FALSE, warning=FALSE}
+global_cases_url<-"C:\\Temp\\time_series_covid19_confirmed_global.csv"
+global_deaths_url<-"C:\\Temp\\time_series_covid19_deaths_global.csv"
+US_cases_url<-"C:\\Temp\\time_series_covid19_confirmed_US.csv"
+US_deaths_url<-"C:\\Temp\\time_series_covid19_deaths_US.csv"
+global_cases<-read_csv(global_cases_url)
+global_deaths<-read_csv(global_deaths_url)
+US_cases<-read_csv(US_cases_url)
+US_deaths<-read_csv(US_deaths_url)
+```
+
+
+# Tidy data
+
+```{r, tidy_global_data, results=FALSE, warning=FALSE}
+global_cases<-global_cases %>% 
+  pivot_longer(cols=-c('Province/State', 
+                       'Country/Region', Lat, Long), 
+              names_to="date",
+              values_to="cases") %>% 
+  select(-c(Lat,Long))
+ 
+global_deaths<-global_deaths %>%
+  pivot_longer(cols=-c('Province/State',
+                       'Country/Region', Lat, Long),
+               names_to="date",
+               values_to="deaths") %>%
+  select(-c(Lat,Long))
+  
+global<-global_cases %>%
+  full_join(global_deaths) %>%
+  rename(Country_Region='Country/Region',
+         Province_State='Province/State') %>%
+  mutate(date=mdy(date))
+
+US_cases<-US_cases %>%
+  pivot_longer(cols=-(UID:Combined_Key),
+               names_to="date",
+               values_to="cases") %>%
+    select(Admin2:cases) %>%
+  mutate(date=mdy(date))%>%
+    select(-c(Lat,Long_))
+    
+US_deaths<-US_deaths %>%
+  pivot_longer(cols =-(UID:Population),
+               names_to="date",
+               values_to="deaths") %>%
+  select(Admin2:deaths) %>%
+  mutate(date=mdy(date))%>%
+  select(-c(Lat,Long_))
+```
+
+```{r, US cases, results=FALSE, warning=FALSE}
+US<-US_cases %>%
+  full_join(US_deaths)
+```
+
+```{r, global, results=FALSE, warning=FALSE}
+global<-global %>%
+    unite("Combined_Key",
+         c(Province_State, Country_Region),
+         sep = ", ",
+         na.rm=TRUE,
+         remove=FALSE)
+```
+
+# Import population data
+
+```{r, add_population_data, results=FALSE, warning=FALSE}
+#add population data
+uid_lookup_url<-"C:\\Temp\\UID_ISO_FIPS_LookUp_Table.csv"
+uid <- read_csv(uid_lookup_url) %>%
+  select(-c(Lat, Long_, Combined_Key, code3, iso2, iso3, Admin2))
+
+global <-global %>%
+  left_join(uid, by=c("Province_State", "Country_Region")) %>%
+  select(-c(UID, FIPS)) %>%
+  select(Province_State, Country_Region, date, 
+         cases, deaths, Population, 
+         Combined_Key)
+```
+
+# Visualize
+
+```{r, ##visualize, results=FALSE, warning=FALSE}
+##Visualize
+US_by_state<-US %>%
+    group_by(Province_State, Country_Region, date) %>%
+    summarize(cases=sum(cases), deaths =sum(deaths),
+              Population=sum(Population)) %>%
+  mutate(deaths_per_mill=deaths *1000000/Population) %>%
+  select(Province_State, Country_Region, date,
+         cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+US_totals<-US_by_state %>%
+    group_by(Country_Region, date) %>%
+    summarize(cases =sum(cases), deaths=sum(deaths),
+              Population =sum(Population)) %>%
+    mutate(deaths_per_mill=deaths *1000000/Population) %>%
+    select(Country_Region, date,
+           cases, deaths, deaths_per_mill, Population) %>%
+    ungroup()
+```
+```{r, plot(US_totals), warning=FALSE}
+US_totals %>%
+    filter(cases>0) %>%
+    ggplot(aes(x=date,y=cases))+
+    geom_line(aes(color = "cases")) +
+    geom_point(aes(color = "cases")) +
+    geom_line(aes(y=deaths,color="deaths")) +
+    geom_point(aes(y=deaths, color = "deaths")) +
+    scale_y_log10() +
+    theme(legend.position="bottom",
+          axis.text.x=element_text(angle=90)) +
+    labs(title="Covid-19 in US", y=NULL)
+```
+```{r, plot(US_by_state), warning=FALSE}
+state<-"New York" 
+US_by_state %>% 
+  filter(Province_State==state) %>%  
+  filter(cases>0) %>% 
+  ggplot(aes(x=date,y=cases))+ 
+  geom_line(aes(color = "cases")) + 
+  geom_point(aes(color = "cases")) +
+  geom_line(aes(y=deaths,color="deaths")) + 
+  geom_point(aes(y=deaths, color = "deaths")) + 
+  scale_y_log10() + 
+  theme(legend.position ="bottom", 
+        axis.text.x=element_text(angle=90)) + 
+  labs(title = str_c("COVID19 in", state), y=NULL) 
+US_by_state <-US_by_state %>% 
+  mutate(new_cases=cases-lag(cases), 
+         new_deaths=deaths-lag(deaths)) 
+US_totals<-US_totals %>% 
+  mutate(new_cases =cases-lag(cases), 
+         new_deaths=deaths - lag (deaths)) 
+tail(US_totals %>% 
+       select(new_cases, new_deaths,everything())) 
+US_totals %>% 
+  ggplot(aes(x=date, y=new_cases)) + 
+  geom_line(aes(color="new cases")) + 
+  geom_point(aes(color="new_cases")) + 
+  geom_line(aes(y=new_deaths, color = "new_deaths")) +
+  geom_point(aes(y=new_deaths, color ="new_deaths")) + 
+  scale_y_log10() + 
+  theme(legend.position ="bottom", 
+        axis.text.x=element_text(angle=90)) + 
+  labs(title="COVID19 in US", y=NULL) 
+US_states_totals<- US_by_state %>% 
+  group_by(Province_State) %>% 
+  summarize(deaths=max(deaths), 
+            cases=max(cases), population=max(Population),
+            cases_per_thou=1000*cases/population,
+            deaths_per_thou=1000*deaths/population) %>%
+  filter(cases>0, population>0) 
+
+US_states_totals %>% 
+  slice_min(deaths_per_thou, n=10) %>% 
+  select(deaths_per_thou, cases_per_thou, everything())
+```
+
+# Model
+```{r, model, results=FALSE, warning=FALSE}
+mod<-lm(deaths_per_thou~cases_per_thou, data=US_states_totals) 
+summary(mod) 
+US_states_totals %>% slice_min(cases_per_thou) 
+US_states_totals %>% slice_max(cases_per_thou) 
+x_grid<-seq(25,150)
+new_df<-tibble(cases_per_thou =x_grid) 
+US_tot_w_pred<-US_states_totals %>% mutate(pred=predict(mod))
+US_tot_w_pred
+
+US_tot_w_pred %>% 
+  ggplot()+
+geom_point(aes(x=cases_per_thou,y=deaths_per_thou), color="blue") + 
+  geom_point(aes(x=cases_per_thou, y=pred), color="red")
+```
